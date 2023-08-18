@@ -50,7 +50,7 @@ bool Log::init(const char *file_name, int close_log, int log_buf_size, int split
     // 找不到/，说明传入的文件名不包含路径信息，只是一个名称
     // 因此可以直接在file_name前加上时间戳作为完整的文件名
     if (nullptr == p) {
-        snprintf(log_full_name, 255, "%d_%02d_%02d_%s", my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, log_name_);
+        snprintf(log_full_name, 255, "%d_%02d_%02d_%s", my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, file_name);
 
     }
     else {
