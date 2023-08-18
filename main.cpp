@@ -1,3 +1,6 @@
+
+// TODO：函数声明和实现完全分离，类包含.h和.cpp文件？
+
 #include<iostream>
 #include<unistd.h>
 #include"lock/locker.h"
