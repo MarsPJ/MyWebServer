@@ -2,7 +2,12 @@
 
 
 SortTimerLST::~SortTimerLST() {
-
+    UtilTimer* tmp = head_;
+    while (tmp) {
+        head_ = tmp->next_;
+        delete tmp;
+        tmp = head_;
+    }
 }
 
 void SortTimerLST::addTimer(UtilTimer *timer) {
@@ -141,8 +146,16 @@ void SortTimerLST::addTimer(UtilTimer *timer, UtilTimer *lst_head) {
     }
 }
 
-void cbFunc(ClientData *user_data)
-{
+void cbFunc(ClientData *user_data) {
+    // 从 epoll 事件表(u_epollfd_)中删除一个文件描述符user_data->sockfd
+    epoll_ctl(Utils::u_epoll_fd_, EPOLL_CTL_DEL, user_data->sockfd, 0);
+    // 用于在调试模式下检查 user_data 是否为空（NULL）
+    assert(user_data);
+    // 关闭文件描述符，即关闭与客户端的连接。
+    close(user_data->sockfd);
+    // TODO:
+    // http_conn::m_user_count--;
+    
 }
 
 void Utils::init(int time_slot) {
@@ -209,6 +222,7 @@ void Utils::timerHandler() {
     // 删掉过时的定时器
     m_timer_lst_.tick();
     // 增加新的定时器
+    // 当 alarm(m_TIME_SLOT_); 被调用后，操作系统将会在经过 m_TIME_SLOT_ 秒后发送一个 SIGALRM 信号给当前进程。
     alarm(m_TIME_SLOT_);
 
 }
@@ -221,7 +235,7 @@ void Utils::showError(int conn_fd, const char *info) {
 }
 
 int* Utils::u_pipe_fd_ = 0;
-int Utils::u_epollfd_ = 0;
+int Utils::u_epoll_fd_ = 0;
 
 
 
