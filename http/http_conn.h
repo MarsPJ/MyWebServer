@@ -13,6 +13,7 @@
 #include<fstream>
 #include<fcntl.h>
 #include<sys/epoll.h>
+#include<sys/mman.h>
 
 
 #include"../CGImysql/sql_connection_pool.h"
@@ -46,7 +47,7 @@ public:
         NO_REQUEST,// 请求不完整，需要继续解析报文数据
         GET_REQUEST,// 获得了完整的HTTP请求
         BAD_REQUEST,// HTTP请求报文有语法错误
-        NO_REQUEST,
+        NO_RESOURCE,
         FORBIDDEN_REQUEST,
         FILE_REQUEST,
         INTERNAL_ERROR,// 服务器内部错误，该结果在主状态机逻辑switch的default下，一般不会触发
@@ -101,9 +102,9 @@ private:
     bool addLinger();
     bool addBlankLine();
 public:
-    static int m_epoll_fd_;
+    static int m_epoll_fd_; // 当前连接对应的epoll实例
     static int m_user_count_;
-    MYSQL* mysql_;
+    MYSQL* mysql_; // 当前与数据库的连接
     int m_state; // 读为0,写为1
 
 private:
@@ -121,28 +122,28 @@ private:
     char m_write__buf_[WRITE_BUFFER_SIZE];
     int m_write_idx_;
 
-    CHECK_STATE m_check_state_;
+    CHECK_STATE m_check_state_; // 当前主状态机状态
     METHOD m_method_; // 请求方法
 
-    char m_read_file_[FILENAME_LEN];
+    char m_real_file_[FILENAME_LEN]; // 要访问的文件的完整路径名
     char* m_url_; // 请求url资源
     char* m_version_; // http版本
-    char* m_host_;
-    long m_content_length_;
+    char* m_host_; // 域名
+    long m_content_length_; // 请求体长度
 
 
     // m_linger 的作用是确定是否在关闭连接时启用 Linger 选项。
     // 如果设置为 true，则表示启用 Linger，连接在关闭时会等待一段时间，直到数据传输完毕或超时。
     // 如果设置为 false，则表示在关闭连接时立即关闭，不管是否还有未传输完的数据。
     bool m_linger_;
-    char* m_file_address_;
-    struct stat m_file_stat_;
+    char* m_file_address_; // mmap映射到内存的地址
+    struct stat m_file_stat_; // 要获取的文件的属性
     struct iovec m_iv_[2];
     int cgi_; // 是否启用的POST,1表示启用，0表示不启用
     char* m_string_; // 存储请求头数据
     int bytes_to_send_;
     int bytes_have_send_;
-    char* doc_root_;
+    char* doc_root_; // 访问资源的根目录
 
     // 存储数据库中的用户名：密码
     std::map<std::string, std::string> m_users_;

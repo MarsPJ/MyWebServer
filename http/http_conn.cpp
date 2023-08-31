@@ -151,7 +151,7 @@ void HTTPConn::init() {
     // 对char*类型的初始化
     memset(m_read_buf_, '\0', READ_BUFFER_SIZE);
     memset(m_write__buf_, '\0', WRITE_BUFFER_SIZE);
-    memset(m_read_file_, '\0', FILENAME_LEN);
+    memset(m_real_file_, '\0', FILENAME_LEN);
 
 }
 bool HTTPConn::readOnce() {
@@ -266,15 +266,14 @@ HTTPConn::HTTP_CODE HTTPConn::processRead() {
     return INTERNAL_ERROR;
 }
 
-bool HTTPConn::processWrite(HTTP_CODE ret)
-{
+bool HTTPConn::processWrite(HTTP_CODE ret) {
     return false;
 }
 
 // 解析请求行：请求方法、目标url、http版本号
 HTTPConn::HTTP_CODE HTTPConn::parseRequestLine(char *text) {
     // 初步定位url位置
-    m_url_ = strpbrk(text, "\t"); // 寻找text中第一次出现\t的位置
+    m_url_ = strpbrk(text, " \t"); // 寻找text中第一次出现\t的位置
     if (!m_url_) {
         return BAD_REQUEST;
     }
@@ -296,15 +295,15 @@ HTTPConn::HTTP_CODE HTTPConn::parseRequestLine(char *text) {
     }
 
     // 精细定位url：跳过所有制表符或空格
-    m_url_ += strspn(m_url_, "\t"); // strspn返回空格或制表符的数量
+    m_url_ += strspn(m_url_, " \t"); // strspn返回空格或制表符的数量
     
     // 重复以上方法 
-    m_version_ = strpbrk(m_url_, "\t");
+    m_version_ = strpbrk(m_url_, " \t");
     if (!m_version_) {
         return BAD_REQUEST;
     }
     *m_version_++ = '\0'; // 置为\0后，m_url_只包括了url部分
-    m_version_ += strspn(m_version_, "\t");
+    m_version_ += strspn(m_version_, " \t");
     
     // 检查version是否合法,只支持HTTP/1.1
     if (strcasecmp(m_version_, "HTTP/1.1") != 0) {
@@ -340,20 +339,207 @@ HTTPConn::HTTP_CODE HTTPConn::parseRequestLine(char *text) {
 }
 
 // 解析请求头
-HTTPConn::HTTP_CODE HTTPConn::parseHeaders(char *text)
-{
-    return HTTP_CODE();
+HTTPConn::HTTP_CODE HTTPConn::parseHeaders(char *text) {
+    // 注意，text是已经被parseLine解析过的，以\0\0结尾
+    // 请求头为空行
+    if (text[0] == '\0') {
+        // 请求体不为空，即为POST方法,继续解析请求体
+        if (m_content_length_ != 0) {
+            m_check_state_ = CHECK_STATE_CONTENT;
+            return NO_REQUEST;
+        }
+        // 请求体为空，解析完成
+        return GET_REQUEST;
+    }
+    // 请求头不为空，检查请求头的当前字段
+    else if (strncasecmp(text, "Connection:", 11) == 0) {
+        text += 11;
+        text += strspn(text, " \t");
+        if (strcasecmp(text, "keep-alive") == 0) {
+            m_linger_ = true;
+        }
+
+    } 
+    else if (strncasecmp(text, "Content-length", 15) == 0) {
+        text += 15;
+        text += strspn(text, " \t");
+        m_content_length_ = atol(text);
+    }
+    else if (strncasecmp(text, "Host:", 5) == 0) {
+        text += 5;
+        text += strspn(text, " \t");
+        m_host_ = text;
+    }
+    // TODO：增加其他解析
+    else {
+        LOG_INFO("Unknow header: %s", text);
+    }
+    return NO_REQUEST;
 }
 
 
 HTTPConn::HTTP_CODE HTTPConn::parseContent(char *text) {
-
-    return HTTP_CODE();
+    // 判断m_read_buf_中是否读入了消息体
+    if (m_read_idx_ >= (m_checked_idx_ + m_content_length_)) {
+        text[m_content_length_] = '\0'; // 封尾
+        // 读取POST请求最后的请求数据（用户名：密码）
+        m_string_ = text;
+        return GET_REQUEST;
+    }
+    return NO_REQUEST;
 }
 
-HTTPConn::HTTP_CODE HTTPConn::doRequest()
-{
-    return HTTP_CODE();
+HTTPConn::HTTP_CODE HTTPConn::doRequest() {
+    // http://example.com/images/pic.jpg 中，pic.jpg 是资源名，而 /images/ 是资源所在的路径。
+    // m_url_:/images/pic.jpg 
+    // 通过定位最后一个斜杠，可以将 URL 分成路径和资源名两部分。
+    const char* p = strrchr(m_url_, '/');
+    strcpy(m_real_file_, doc_root_);
+    int len = strlen(doc_root_);
+    // 欢迎访问界面：http://192.168.43.219:9006/
+    // 新用户注册：http://192.168.43.219:9006/0
+    // 已有帐号登录：http://192.168.43.219:9006/1
+    // 登录校验：http://192.168.43.219:9006/2CGISQL.cgi
+    // 注册校验：http://192.168.43.219:9006/3CGISQL.cgi
+    // 看图：http://192.168.43.219:9006/5
+
+    // 获取要访问的完整文件路径
+    // cgi登录或注册检验页面
+    if (cgi_ == 1 && (*(p + 1) == '2' || *(p + 1) == '3')) {
+        // flag读取为2或3
+        char flag = m_url_[1];
+
+        // 获取资源名m_url_real：CGISQL.cgi
+        char* m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/");
+        strcat(m_url_real, m_url_ + 2);
+
+        // 获取文件完整路径m_real_file_：TODO：完整路径名是什么
+
+        strncpy(m_real_file_, m_url_real, FILENAME_LEN - len -1);
+        free(m_url_real);
+
+        // 提取用户名和密码
+        // 例如：user=123&password=123
+        char name[100], password[100];
+        int i;
+        for (i = 5; m_string_[i] != '&'; ++i) {
+            name[i - 5] = m_string_[i];
+        }
+        name[i - 5] = '\0'; // 封尾
+
+        int j = 0;
+        for (i = i + 10; m_string_[i] != '\0'; ++i, ++j) {
+            password[j] = m_string_[i];
+        }
+        password[j] = '\0';
+
+        // 注册校验
+        if (*(p + 1) == '3') {
+            // 如果是注册，先检查是否有重名
+            // 没有重名，新增入数据库
+            char* sql_insert = (char*)malloc(sizeof(char) * 200);
+            strcpy(sql_insert, "INSERT INTO VALUES(username, passwd) VALUES(");
+            strcat(sql_insert, "'");
+            strcat(sql_insert, name);
+            strcat(sql_insert, "','");
+            strcat(sql_insert, password);
+            strcat(sql_insert, "')");
+            // 在C++中编写SQL语句时，不需要在SQL语句的末尾添加分号（;）。SQL语句的分号通常在交互式数据库客户端中使用，用于表示输入的SQL语句结束，以便客户端知道何时将语句发送到数据库执行。
+
+            // TODO：这里检查的数据来自初始化时候存入users的数据，数据有可能已经发生了更新？
+            // 不重名
+            if (users.find(name) == users.end()) {
+                // 保护临界区
+                m_lock.lock();
+                int res = mysql_query(mysql_, sql_insert);
+                users.insert(std::pair<std::string, std::string>(name, password));
+                m_lock.unlock();
+
+                // 插入（注册）成功，m_url_改为登录界面，跳转到登录界面
+                if (!res) {
+                    strcpy(m_url_, "/log.html");
+                }
+                // 插入（注册）失败，跳转到注册失败页面
+                else {
+                    strcpy(m_url_, "/registerError.html");
+                }
+
+            }
+            else {
+                strcpy(m_url_, "/registerError.html");
+            }
+        }
+        // 登录校验
+        else if (*(p + 1) == '2') {
+            // 登录成功
+            if (users.find(name) != users.end() && users[name] == password) {
+                strcpy(m_url_, "welcome.html");
+            }
+            // 登录失败
+            else {
+                strcpy(m_url_, "/registerError.html");
+            }
+        }
+
+
+    }
+    // 普通注册页面
+    if (*(p + 1) == '0') {
+        char* m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/register.html");
+        strncpy(m_real_file_ + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+    // 普通登录页面
+    else if (*(p + 1) == '1') {
+        char * m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/log.html");
+        strncpy(m_real_file_ + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+    else if (*(p + 1) == '5') {
+        char * m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/picture.html");
+        strncpy(m_real_file_ + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+        else if (*(p + 1) == '6') {
+        char * m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/video.html");
+        strncpy(m_real_file_ + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+        else if (*(p + 1) == '7') {
+        char * m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/fans.html");
+        strncpy(m_real_file_ + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+    else {
+        strncpy(m_real_file_ + len, m_url_, FILENAME_LEN - len - 1);
+    }
+
+
+    // 检查要访问文件的权限
+    if (stat(m_real_file_, &m_file_stat_) < 0) {
+        return NO_RESOURCE;
+    }
+
+    // st_mode：文件的类型和权限
+    // 是否可读
+    if (!(m_file_stat_.st_mode & S_IROTH)) {
+        return FORBIDDEN_REQUEST;
+    }
+    // 是否是一个目录,是的话报文有误
+    if (S_ISDIR(m_file_stat_.st_mode)) {
+        return BAD_REQUEST;
+    }
+    int fd = open(m_real_file_, O_RDONLY);
+    // 将文件映射到内存
+    m_file_address_ = (char*)mmap(0, m_file_stat_.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    return FILE_REQUEST;
 }
 
 char *HTTPConn::getLine()
