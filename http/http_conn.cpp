@@ -11,6 +11,7 @@ const char *error_404_form = "The requested file was not found on this server.\n
 const char *error_500_title = "Internal Error";
 const char *error_500_form = "There was an unusual problem serving the request file.\n";
 
+// TODO:可以直接设置为static类型吗
 locker m_lock;
 std::map<std::string, std::string> users;
 void HTTPConn::initMysqlResult(ConnectionPool* conn_pool) {
@@ -150,7 +151,7 @@ void HTTPConn::init() {
 
     // 对char*类型的初始化
     memset(m_read_buf_, '\0', READ_BUFFER_SIZE);
-    memset(m_write__buf_, '\0', WRITE_BUFFER_SIZE);
+    memset(m_write_buf_, '\0', WRITE_BUFFER_SIZE);
     memset(m_real_file_, '\0', FILENAME_LEN);
 
 }
@@ -199,13 +200,30 @@ bool HTTPConn::readOnce() {
     return true;
 }
 
-void HTTPConn::process()
-{
+// TODO：不太理解这段的具体逻辑
+void HTTPConn::process() {
+    HTTP_CODE read_ret = processRead();
+    if (read_ret == NO_REQUEST) {
+        modFD(m_epoll_fd_, m_sock_fd_, EPOLLIN, m_TRIGMode_);
+        return;
+    }
+    bool write_ret = processWrite(read_ret);
+    // 如果写入不成功，则直接关闭连接
+    // TODO：为什么这么粗暴关闭？
+    if (!write_ret) {
+        closeConn();
+    }
+    modFD(m_epoll_fd_, m_sock_fd_, EPOLLOUT, m_TRIGMode_);
 }
 
 
-bool HTTPConn::write()
-{
+bool HTTPConn::write() {
+    /**
+     * writev 将指定的多个内存块的数据按顺序写入到文件描述符中。
+     * 这种技术对于减少系统调用的次数，提高数据传输效率以及进行零拷贝（zero-copy）操作都非常有用。
+     * 零拷贝技术允许在数据传输中避免将数据从一个缓冲区复制到另一个缓冲区，而是通过引用或映射内存来实现数据传输。
+     * 
+    */
     return false;
 }
 
@@ -267,7 +285,69 @@ HTTPConn::HTTP_CODE HTTPConn::processRead() {
 }
 
 bool HTTPConn::processWrite(HTTP_CODE ret) {
-    return false;
+    switch (ret) {
+        // 内部错误·
+        case INTERNAL_ERROR: {
+            addStatusLine(500, error_500_title);// HTTP1.1 500 Internal Error
+            addHeaders(strlen(error_500_form));
+            if (!addContent(error_500_form)) {
+                return false;
+            }
+            break;
+        }
+        // 报文语法有误
+        case BAD_REQUEST: {
+            addStatusLine(404, error_404_title);
+            addHeaders(strlen(error_404_form));
+            if (!addContent(error_404_form)) {
+                return false;
+            }
+            break;
+        }
+        // 资源没有访问权限
+        case FORBIDDEN_REQUEST: {
+            addStatusLine(403, error_403_title);
+            addHeaders(strlen(error_403_form));
+            if (!addContent(error_400_title)) {
+                return false;
+            }
+            break;  
+        }
+        // 请求成功，返回带数据的响应
+        case FILE_REQUEST: {
+            addStatusLine(200, ok_200_title);
+            if (m_file_stat_.st_size != 0) {
+                addHeaders(m_file_stat_.st_size);
+                // 要写入的第一个内容：write_buf,即响应行+响应头
+                m_iv_[0].iov_base = m_write_buf_;
+                m_iv_[0].iov_len = m_write_idx_;
+                // 要写入的第二个内容：请求的资源文件数据，即响应体
+                m_iv_[1].iov_base = m_file_address_;
+                m_iv_[1].iov_len = m_file_stat_.st_size;
+                m_iv_count_ = 2;
+                bytes_to_send_ = m_write_idx_ + m_file_stat_.st_size;
+                return true;
+
+            }
+             //如果请求的资源大小为0，则返回空白html文件
+            else {
+                const char* ok_string = "<html><body></body></html>";
+                addHeaders(strlen(ok_string));
+                if (!addContent(ok_string)) {
+                    return false;
+                }
+            }
+        }
+        default: {
+            return false;
+        }
+    }
+    // 请求不成功，返回不带数据的响应
+    m_iv_[0].iov_base = m_write_buf_;
+    m_iv_[0].iov_len = m_write_idx_;
+    m_iv_count_ = 1;
+    bytes_to_send_ = m_write_idx_;
+    return true;
 }
 
 // 解析请求行：请求方法、目标url、http版本号
@@ -590,46 +670,64 @@ HTTPConn::LINE_STATUS HTTPConn::parseLine() {
     return LINE_OPEN;
 }
 
+// 释放m_file_address指向的内存映射。
 void HTTPConn::unmap() {
+    if (m_file_address_) {
+        munmap(m_file_address_, m_file_stat_.st_size);
+        m_file_address_ = 0;
+    }
 
 }
+// format就是包含了格式占位符(%d %s)的字符串，...就是代入占位符的各个变量
+bool HTTPConn::addResponse(const char *format, ...) {
+    if (m_write_idx_ >= WRITE_BUFFER_SIZE) {
+        return false;
+    }
+    // 定义可变参数列表
+    va_list arg_list;
+    // 初始化可变参数列表
+    va_start(arg_list, format);
+    int len = vsnprintf(m_write_buf_ + m_write_idx_, WRITE_BUFFER_SIZE - 1 - m_write_idx_, format, arg_list);
+    if (len >= (WRITE_BUFFER_SIZE - 1 - m_write_idx_)) {
+        // 清空可变参数列表
+        va_end(arg_list);
+        return false;
+    }
+    m_write_idx_ += len;
+    va_end(arg_list);
 
-bool HTTPConn::addResponse(const char *format, ...)
-{
-    return false;
+    LOG_INFO("request:%s", m_write_buf_);
+    return true;
 }
 
-bool HTTPConn::addContent(const char *content)
-{
-    return false;
+bool HTTPConn::addContent(const char *content) {
+    return addResponse("%s", content);
 }
 
-bool HTTPConn::addStatusLine(int status, const char *title)
-{
-    return false;
+bool HTTPConn::addStatusLine(int status, const char *title) {
+
+    return addResponse("%s %d %s\r\n", "HTTP1.1", status, title);
 }
 
-bool HTTPConn::addHeaders(int content_length)
-{
-    return false;
+bool HTTPConn::addHeaders(int content_length) {
+    return addContentLength(content_length) && addLinger() && addBlankLine();
 }
 
-bool HTTPConn::addContentType()
-{
-    return false;
+bool HTTPConn::addContentType() {
+    return addResponse("Content-Type:%s\r\n", "text/html");
 }
 
-bool HTTPConn::addContentLength(int content)
-{
-    return false;
+bool HTTPConn::addContentLength(int content_length) {
+    return addResponse("Content-Length:%d\r\n", content_length);
 }
 
-bool HTTPConn::addLinger()
-{
-    return false;
-}
+bool HTTPConn::addLinger() {
 
-bool HTTPConn::addBlankLine()
-{
-    return false;
+    return addResponse("Connection:%s\r\n", (m_linger_ == true) ? "keep-alive" : "close");
+
+}
+// 添加空行
+bool HTTPConn::addBlankLine() {
+
+    return addResponse("%s", "\r\n");
 }

@@ -14,6 +14,7 @@
 #include<fcntl.h>
 #include<sys/epoll.h>
 #include<sys/mman.h>
+#include<stdarg.h>
 
 
 #include"../CGImysql/sql_connection_pool.h"
@@ -119,7 +120,7 @@ private:
     long m_checked_idx_;// 指向指向已经被解析（加了\0\0）的那一行数据的下一行数据的开头
     int m_start_line_; // 指向已经被解析（加了\0\0）的那一行数据的开头
 
-    char m_write__buf_[WRITE_BUFFER_SIZE];
+    char m_write_buf_[WRITE_BUFFER_SIZE];
     int m_write_idx_;
 
     CHECK_STATE m_check_state_; // 当前主状态机状态
@@ -139,9 +140,10 @@ private:
     char* m_file_address_; // mmap映射到内存的地址
     struct stat m_file_stat_; // 要获取的文件的属性
     struct iovec m_iv_[2];
+    int m_iv_count_;
     int cgi_; // 是否启用的POST,1表示启用，0表示不启用
     char* m_string_; // 存储请求头数据
-    int bytes_to_send_;
+    int bytes_to_send_; // 整个响应内容的大小（响应行+响应头+响应体）
     int bytes_have_send_;
     char* doc_root_; // 访问资源的根目录
 
