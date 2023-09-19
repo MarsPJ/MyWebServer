@@ -105,7 +105,7 @@ bool ThreadPool<T>::appendP(T *request) {
 template <typename T>
 void *ThreadPool<T>::worker(void *arg) {
     ThreadPool* thread_pool = (ThreadPool*) arg;
-    pool->run();
+    thread_pool->run();
     return thread_pool;
 }
 // TODO:http完成后补充
@@ -125,13 +125,41 @@ void ThreadPool<T>::run() {
         m_work_queue_.pop_front();
         m_queue_locker_.unlock();
 
+        // 空连接
         if (!request) {
             continue;
         }
-        if (0 == request->m_state_) {
-            if (request->read_once()) {
-                
+
+        if (1 == m_actor_model_) {
+            // 读取请求数据的阶段
+            if (0 == request->m_state_) {
+                if (request->readOnce()) {
+                    request->improv_ = 1;
+                    ConnectionRAII mysqlconn(&request->mysql_, m_conn_pool_);
+                    request->process();
+                }
+                else {
+                    request->improv_ = 1;
+                    request->timer_flag_ = 1;
+                }
+            }
+            // 响应阶段
+            else {
+                if (request->write()) {
+                    request->improv_ = 1;
+
+                }
+                else {
+                    request->improv_ = 1;
+                    request->timer_flag_ = 1;
+                }
             }
         }
+        else {
+            ConnectionRAII mysqlconn(&request->mysql_, m_conn_pool_);
+            request->process();
+        }
+
+
     }
 }

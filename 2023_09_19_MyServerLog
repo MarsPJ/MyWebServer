@@ -1,0 +1,17 @@
+2023-09-19 22:01:46.514338 [info]:timer tick
+2023-09-19 22:01:51.514793 [info]:timer tick
+2023-09-19 22:01:56.514934 [info]:timer tick
+2023-09-19 22:01:57.521603 [error]:accept error:errno is:11
+2023-09-19 22:01:57.525275 [info]:deal with the client(192.168.25.152)
+2023-09-19 22:01:57.525372 [info]
+2023-09-19 22:02:57.374425 [error]:accept error:errno is:11
+2023-09-19 22:02:57.377056 [info]:deal with the client(192.168.25.152)
+2023-09-19 22:02:57.377184 [info]
+2023-09-19 22:10:42.334574 [info]:timer tick
+2023-09-19 22:10:47.335371 [info]:timer tick
+2023-09-19 22:10:52.336335 [info]:timer tick
+2023-09-19 22:10:57.336620 [info]:timer tick
+2023-09-19 22:11:29.214365 [info]:timer tick
+2023-09-19 22:11:33.075527 [error]:accept error:errno is:11
+2023-09-19 22:11:33.075616 [info]:deal with the client(192.168.25.152)
+2023-09-19 22:11:33.075639 [info]

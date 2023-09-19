@@ -76,7 +76,7 @@ public:
     bool write();
     sockaddr_in* getAddress();
     void initMysqlResult(ConnectionPool* conn_pool);
-    // TODO：是否可以改变以下两个变量位置
+    // TODO：是否可以改变以下两个变量位置，以下两个变量表示什么含义
     int timer_flag_;
     int improv_;
 
@@ -106,7 +106,7 @@ public:
     static int m_epoll_fd_; // 当前连接对应的epoll实例
     static int m_user_count_;
     MYSQL* mysql_; // 当前与数据库的连接
-    int m_state; // 读为0,写为1
+    int m_state_; // 读为0,写为1
 
 private:
     // 当前连接的socket描述符

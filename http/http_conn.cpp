@@ -145,7 +145,7 @@ void HTTPConn::init() {
     m_read_idx_ = 0;
     m_write_idx_ = 0;
     cgi_ = 0;
-    m_state = 0;
+    m_state_ = 0;
     timer_flag_ = 0;
     improv_ = 0;
 
@@ -224,17 +224,63 @@ bool HTTPConn::write() {
      * 零拷贝技术允许在数据传输中避免将数据从一个缓冲区复制到另一个缓冲区，而是通过引用或映射内存来实现数据传输。
      * 
     */
-    return false;
+    int temp = 0;
+    // 服务器已经完成了对当前请求的响应，可以准备处理下一个请求
+    if (bytes_to_send_ == 0) {
+        modFD(m_epoll_fd_, m_sock_fd_, EPOLLIN, m_TRIGMode_);
+        init(); // 重置 HTTP 连接的各种状态
+        return true;
+    }
+    while (true) {
+        temp = writev(m_sock_fd_, m_iv_, m_iv_count_);
+        if (temp < 0) {
+            // 发送缓冲区已满，套接字被设置为非阻塞模式,表示当前无法立即写入数据，需要等待下一次写入机会。
+            if (errno == EAGAIN) {
+                // 等待下一次写事件触发（当写缓冲区从不可写变为可写，触发epollout）
+                modFD(m_epoll_fd_, m_sock_fd_, EPOLLOUT, m_TRIGMode_);
+                return true;
+            }
+            unmap();
+            return false;
+        }
+        bytes_have_send_ += temp;
+        bytes_to_send_ -= temp;
+        // 写入的数据大于或等于第一个缓冲区的数据量
+        if (bytes_have_send_ >= m_iv_[0].iov_len) {
+            m_iv_[0].iov_len = 0;
+            // m_write_idx_ 其实就是第一个缓冲区的大小
+            // 这里bytes_have_send_ - m_write_idx_是考虑前一次writev已经写了一部分资源文件的数据的情况
+            m_iv_[1].iov_base = m_file_address_ + (bytes_have_send_ - m_write_idx_);
+            m_iv_[1].iov_len = bytes_have_send_;
+        }
+        // 第一个缓冲区没写完
+        else {
+            m_iv_[0].iov_base = m_write_buf_ + bytes_have_send_;
+            m_iv_[0].iov_len = m_iv_[0].iov_len - bytes_have_send_;
+        }
+
+        if (bytes_to_send_ <= 0) {
+            unmap();
+            modFD(m_epoll_fd_, m_sock_fd_, EPOLLIN, m_TRIGMode_);
+
+            if (m_linger_) {
+                init();
+                return true;
+            }
+            else {
+                // TODO：为什么要返回false
+                return false;
+            }
+        }
+
+
+    }
+
 }
 
-sockaddr_in *HTTPConn::getAddress()
-{
-    return nullptr;
+sockaddr_in *HTTPConn::getAddress() {
+    return &m_address_;
 }
-
-
-
-
 
 HTTPConn::HTTP_CODE HTTPConn::processRead() {
     LINE_STATUS line_status = LINE_OK;
